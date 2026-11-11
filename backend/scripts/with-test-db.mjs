@@ -77,7 +77,9 @@ if (mode === 'diff') {
   console.log('Prisma model diff is empty.')
 } else {
   result = spawnSync(process.execPath, [
-    '--experimental-strip-types', '--test', 'test/auth.integration.test.ts',
+    '--experimental-strip-types', '--test',
+    'test/auth.integration.test.ts',
+    'test/tenant.integration.test.ts',
   ], { stdio: 'inherit', env: process.env })
 }
 

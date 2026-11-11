@@ -49,7 +49,7 @@ npx prisma format
 npx prisma validate
 ```
 
-`db:check`, `db:status`, and database readiness endpoints use `DATABASE_URL` directly; confirm the destination before using them. Never point tests at `gymflow_saas`. Authentication migration and test commands use `scripts/with-test-db.mjs`, which rewrites the URL to `gymflow_test`, verifies `current_database()`, and passes only that URL to Prisma or the test runner:
+`db:check`, `db:status`, and database readiness endpoints use `DATABASE_URL` directly; confirm the destination before using them. Never point tests at `gymflow_saas`. Authentication and tenant integration tests use `scripts/with-test-db.mjs`, which rewrites the URL to `gymflow_test`, verifies `current_database()`, and passes only that URL to Prisma or the test runner:
 
 ```powershell
 npm run db:test:status
@@ -81,10 +81,34 @@ Phase 3 adds these endpoints:
 - `POST /api/v1/auth/logout-all` revokes the authenticated user's active sessions.
 - `GET /api/v1/auth/me` returns the authenticated global user.
 - `GET /api/v1/auth/sessions` lists only that user's active session metadata; `DELETE /api/v1/auth/sessions/:sessionId` revokes only a session owned by that user.
+- `GET /api/v1/gyms` lists gyms where the authenticated user has an active membership, with the role for each gym.
 
 Passwords use Argon2id. Refresh tokens are random 256-bit values; only their SHA-256 hashes are stored. Access tokens are HS256-signed, expire after ten minutes, and identify a global user and session only. Authentication middleware checks the current user status and session revocation state in PostgreSQL, so logout and account suspension invalidate access immediately. Error messages do not reveal whether a user exists or is suspended.
 
-Authentication is intentionally separate from gym authorization. No token contains a trusted `gymId` or role. A successful login does not grant membership in any gym; later tenant middleware must derive an authorized gym from `GymUser` and scope every tenant-owned query.
+Authentication is intentionally separate from gym authorization. No token contains a trusted `gymId` or role. A successful login does not grant membership in any gym; tenant middleware must derive an authorized gym from `GymUser` and scope every tenant-owned query.
+
+## Multi-gym context and authorization
+
+`GET /api/v1/gyms` returns the authenticated user's active gym memberships, each with the gym's display fields and the role stored for that specific membership. It does not grant access by itself. For a gym-scoped request, the client selects a gym using `X-Gym-Id`; this header is an untrusted selector. `authenticate` runs first, then `resolveGym()` loads the `(gymId, userId)` `GymUser` row from PostgreSQL, requires an ACTIVE membership and ACTIVE gym, and places the server-derived gym ID, role, and gym status in request-local context. Missing selectors return 400; inaccessible gyms return 404. Client-provided gym IDs in the path, query, or body must never be used as authorization or as the scope of a tenant-owned query.
+
+For read-only gym routes, use this order: `authenticate`, `resolveGym()`, `requirePermission('<explicit:key>')`, validated input, and a data query scoped by `response.locals.tenant.gymId`. This is a request-time authorization snapshot; it is not atomic with later database work. Object lookups must include that gym ID (or use a tenant-scoped composite key); a global record ID alone is not sufficient. Writes must derive `gymId` from tenant context and must not accept it from request data. Return 404 for inaccessible gyms or tenant-owned objects and 403 for a missing permission. Unknown permission keys are denied.
+
+Consequential tenant mutations must use `withAuthorizedGymMutation` in `src/middleware/with-authorized-gym-mutation.ts`; all protected database writes must use its transaction client. It locks the Gym row and current actor `GymUser` row with PostgreSQL `FOR SHARE`, re-reads status and role under `READ COMMITTED`, and holds the locks through commit. PostgreSQL updates/deletes of those rows conflict with these locks, so revocation, suspension, role changes, and gym status changes serialize with the operation. Membership administration must use `withAuthorizedGymMembershipMutation`, provide all target user IDs, and evaluate roles from its sorted, locked database rows. The lock order is always Gym first, then GymUser rows by user ID. Callers must not rely on `response.locals.tenant` alone for a consequential write.
+
+The approved permission matrix is implemented in `src/permissions/gym-permissions.ts`:
+
+| Role | Allowed scope |
+| --- | --- |
+| OWNER | All defined gym permissions. Ownership transfer is intentionally not exposed through this permission helper and requires a separate design. |
+| MANAGER | Members, attendance, finance, wallets, transactions, plans, ordinary gym operations, and STAFF/TRAINER membership management. Cannot manage OWNER/MANAGER memberships, settings, or SaaS subscription administration. |
+| STAFF | Read/manage members and attendance. |
+| TRAINER | Read members and read/manage attendance. |
+
+Gym status is checked on each selection, not taken from a token. ACTIVE gyms permit normal routes. PENDING gyms are denied by default; explicitly approved owner setup routes may call `resolveGym({ allowPendingOwner: true })` and must then require `gym:setup`. `requirePermission` also denies every non-setup permission for PENDING context. SUSPENDED and ARCHIVED gyms do not resolve for operations. Suspended, invited, or absent memberships are inaccessible.
+
+Phase 4 currently adds only the safe gym selector listing endpoint and authorization building blocks. There are no production member, attendance, billing, or other business routes yet. The `/_phase4_test/*` routes exist only in the test app and are never mounted by the production server. The integration tests exercise real authentication and tenant middleware plus test-only scoped sample reads; do not treat the harness as a production API.
+
+RLS remains disabled. Before enabling it, design transaction-bound PostgreSQL tenant context that cannot leak across pooled connections, ensure every tenant query runs in that transaction, and test fail-closed behavior and background jobs. Middleware authorization and tenant-scoped queries remain mandatory even if RLS is later added.
 
 `ACCESS_TOKEN_SECRET` is mandatory and must be a unique random secret of at least 32 bytes. `npm run auth:secret:local` adds a local random secret to the ignored `.env` without displaying it. Use a secret manager for deployed environments; do not reuse the local key.
 
@@ -103,9 +127,10 @@ src/
   auth/         Argon2id passwords, signed access tokens, refresh sessions, validation
   config/       Environment parsing and validation
   middleware/   Authentication, request context/logging, CORS/security, validation, errors
-  routes/       Versioned auth and health routes
+  routes/       Versioned auth, health, and gym-list routes
+  permissions/  Gym role permission matrix and membership-role policy
 scripts/        Local secret setup and test-database safety wrapper
-test/           PostgreSQL-backed authentication integration tests
+test/           PostgreSQL-backed authentication and tenant integration tests
   types/        Express request/response typing
   utils/        Shared errors
   app.ts        Express application composition
@@ -115,4 +140,4 @@ test/           PostgreSQL-backed authentication integration tests
 
 ## Current scope and next phases
 
-Phase 3 provides login, refresh rotation and reuse detection, logout and session revocation, active-account checks, rate limits, and database-backed auth integration tests. It does not implement user registration, password recovery, gym authorization, business APIs, localStorage migration, RLS, automated SaaS billing, or production deployment. Do not add tenant-owned API routes until Phase 4 authorization is implemented.
+Phase 3 provides login, refresh rotation and reuse detection, logout and session revocation, active-account checks, and rate limits. Phase 4 adds per-request gym membership resolution, server-side role permissions, a gym membership listing endpoint, and isolated tenant authorization tests. User registration, password recovery, tenant-owned business APIs, localStorage migration, RLS, automated SaaS billing, and production deployment remain out of scope.

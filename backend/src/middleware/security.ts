@@ -25,7 +25,7 @@ export function corsPolicy(request: Request, response: Response, next: NextFunct
   }
 
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-Id')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-Id, X-Gym-Id')
   response.setHeader('Access-Control-Max-Age', '600')
 
   if (request.method === 'OPTIONS') return response.status(204).end()
