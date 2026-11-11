@@ -65,7 +65,7 @@ function SearchableWorkspace() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/GymFlow">
       <FinancialProvider>
         <MemberProvider>
           <SearchableWorkspace />
