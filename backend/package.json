@@ -1,0 +1,36 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --experimental-strip-types src/server.ts",
+    "dev": "node --experimental-strip-types --watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:check": "node --experimental-strip-types src/check-db.ts",
+    "db:status": "prisma migrate status"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "prisma": "^7.10.1",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "prisma@7.10.1": true,
+    "@prisma/engines@7.10.1": true,
+    "esbuild@0.28.2": true
+  }
+}

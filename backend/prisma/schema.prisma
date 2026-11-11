@@ -1,0 +1,506 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../generated/prisma"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GymStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum SubscriptionStatus {
+  NOT_CONFIGURED
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  EXPIRED
+  CANCELLED
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum GymRole {
+  OWNER
+  MANAGER
+  STAFF
+  TRAINER
+}
+
+enum GymUserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum MemberGender {
+  MALE
+  FEMALE
+  OTHER
+  UNSPECIFIED
+}
+
+enum MemberStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  ARCHIVED
+}
+
+enum ShiftCategory {
+  GENTS
+  LADIES
+  MIXED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+enum WalletType {
+  CASH
+  DIGITAL
+  BANK
+  OTHER
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+enum ExpenseCategory {
+  RENT
+  SALARIES
+  UTILITIES
+  EQUIPMENT
+  MAINTENANCE
+  CLEANING
+  MARKETING
+  SUPPLIES
+  OTHER
+}
+
+enum CashSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum CashMovementSide {
+  SOURCE
+  DESTINATION
+}
+
+enum AuditAction {
+  MEMBER_CREATED
+  MEMBER_UPDATED
+  MEMBER_ARCHIVED
+  ROLE_CHANGED
+  FINANCIAL_TRANSACTION_CREATED
+  FINANCIAL_TRANSACTION_REVERSED
+  PAYMENT_RECORDED
+  EXPENSE_RECORDED
+  CASH_SESSION_OPENED
+  CASH_SESSION_CLOSED
+  GYM_SETTINGS_UPDATED
+  GYM_STATUS_CHANGED
+  ADMIN_ACTION
+}
+
+model Gym {
+  id                     String             @id @default(uuid()) @db.Uuid
+  name                   String             @db.VarChar(160)
+  slug                   String             @unique @db.VarChar(100)
+  contactEmail           String?            @db.VarChar(320)
+  contactPhone           String?            @db.VarChar(40)
+  website                String?            @db.VarChar(255)
+  address                String?            @db.Text
+  status                 GymStatus          @default(PENDING)
+  subscriptionStatus     SubscriptionStatus @default(NOT_CONFIGURED)
+  subscriptionPlanName   String?            @db.VarChar(100)
+  trialEndsAt            DateTime?          @db.Timestamptz(3)
+  subscriptionExpiresAt  DateTime?          @db.Timestamptz(3)
+  subscriptionAdminNotes String?            @db.Text
+  memberRollPrefix       String             @default("GF") @db.VarChar(20)
+  // Allocate by atomically incrementing this row inside the member-create
+  // transaction. The unique (gymId, rollNo) constraint is the final guard.
+  nextMemberRollNumber   Int                @default(1001)
+  createdAt              DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @db.Timestamptz(3)
+
+  memberships          GymUser[]
+  members              Member[]
+  membershipPlans      MembershipPlan[]
+  shifts               Shift[]
+  attendance           Attendance[]
+  wallets              Wallet[]
+  transactions         Transaction[]
+  payments             Payment[]
+  expenses             Expense[]
+  cashSessions         CashSession[]
+  cashSessionMovements CashSessionMovement[]
+  auditLogs            AuditLog[]
+  settings             GymSettings?
+
+  @@index([status, createdAt])
+}
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  email           String     @unique @db.VarChar(320)
+  passwordHash    String     @db.VarChar(255)
+  firstName       String     @db.VarChar(100)
+  lastName        String?    @db.VarChar(100)
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?  @db.Timestamptz(3)
+  lastLoginAt     DateTime?  @db.Timestamptz(3)
+  createdAt       DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime   @updatedAt @db.Timestamptz(3)
+
+  gymMemberships GymUser[]
+
+  @@index([status])
+}
+
+model GymUser {
+  gymId     String        @db.Uuid
+  userId    String        @db.Uuid
+  role      GymRole
+  status    GymUserStatus @default(INVITED)
+  invitedAt DateTime?     @db.Timestamptz(3)
+  joinedAt  DateTime?     @db.Timestamptz(3)
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @db.Timestamptz(3)
+
+  gym                 Gym           @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user                User          @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdMembers      Member[]      @relation("MemberCreator")
+  markedAttendance    Attendance[]  @relation("AttendanceMarker")
+  createdTransactions Transaction[] @relation("TransactionCreator")
+  recordedPayments    Payment[]     @relation("PaymentRecorder")
+  recordedExpenses    Expense[]     @relation("ExpenseRecorder")
+  openedCashSessions  CashSession[] @relation("CashSessionOpener")
+  closedCashSessions  CashSession[] @relation("CashSessionCloser")
+  auditLogs           AuditLog[]    @relation("GymUserAuditActor")
+
+  // A user is unique only within a gym membership; their role lives here,
+  // allowing the same account to hold different roles in different gyms.
+  @@id([gymId, userId])
+  @@index([userId, status])
+  @@index([gymId, role, status])
+}
+
+model Member {
+  id                  String       @id @default(uuid()) @db.Uuid
+  gymId               String       @db.Uuid
+  rollNo              String       @db.VarChar(40)
+  fullName            String       @db.VarChar(200)
+  phone               String?      @db.VarChar(40)
+  email               String?      @db.VarChar(320)
+  gender              MemberGender @default(UNSPECIFIED)
+  status              MemberStatus @default(ACTIVE)
+  membershipPlanId    String?      @db.Uuid
+  membershipFee       Decimal      @db.Decimal(12, 2)
+  membershipStartDate DateTime?    @db.Date
+  membershipExpiresAt DateTime?    @db.Date
+  nextDueDate         DateTime?    @db.Date
+  notes               String?      @db.Text
+  archivedAt          DateTime?    @db.Timestamptz(3)
+  createdByUserId     String?      @db.Uuid
+  createdAt           DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime     @updatedAt @db.Timestamptz(3)
+
+  gym            Gym             @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membershipPlan MembershipPlan? @relation(fields: [gymId, membershipPlanId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy      GymUser?        @relation("MemberCreator", fields: [gymId, createdByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+  attendance     Attendance[]
+  payments       Payment[]
+
+  @@unique([gymId, id])
+  @@unique([gymId, rollNo])
+  @@index([gymId, status, fullName])
+  @@index([gymId, nextDueDate])
+  @@index([gymId, membershipPlanId])
+  @@index([gymId, createdAt])
+}
+
+model MembershipPlan {
+  id           String   @id @default(uuid()) @db.Uuid
+  gymId        String   @db.Uuid
+  name         String   @db.VarChar(100)
+  description  String?  @db.Text
+  durationDays Int
+  fee          Decimal  @db.Decimal(12, 2)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  gym      Gym       @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members  Member[]
+  payments Payment[]
+
+  @@unique([gymId, id])
+  @@unique([gymId, name])
+  @@index([gymId, isActive])
+}
+
+model Shift {
+  id        String        @id @default(uuid()) @db.Uuid
+  gymId     String        @db.Uuid
+  name      String        @db.VarChar(100)
+  category  ShiftCategory
+  startTime String?       @db.VarChar(5)
+  endTime   String?       @db.VarChar(5)
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @db.Timestamptz(3)
+
+  gym        Gym          @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attendance Attendance[]
+
+  @@unique([gymId, id])
+  @@unique([gymId, name])
+  @@index([gymId, category, isActive])
+}
+
+model Attendance {
+  id             String           @id @default(uuid()) @db.Uuid
+  gymId          String           @db.Uuid
+  memberId       String           @db.Uuid
+  shiftId        String?          @db.Uuid
+  markedByUserId String?          @db.Uuid
+  attendanceDate DateTime         @db.Date
+  checkedInAt    DateTime?        @db.Timestamptz(3)
+  status         AttendanceStatus @default(PRESENT)
+  isManual       Boolean          @default(false)
+  manuallyEdited Boolean          @default(false)
+  notes          String?          @db.Text
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @db.Timestamptz(3)
+
+  gym      Gym      @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  member   Member   @relation(fields: [gymId, memberId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  shift    Shift?   @relation(fields: [gymId, shiftId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  markedBy GymUser? @relation("AttendanceMarker", fields: [gymId, markedByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([gymId, id])
+  @@index([gymId, attendanceDate])
+  @@index([gymId, memberId, attendanceDate])
+  @@index([gymId, shiftId, attendanceDate])
+  @@index([gymId, status, attendanceDate])
+}
+
+model Wallet {
+  id             String     @id @default(uuid()) @db.Uuid
+  gymId          String     @db.Uuid
+  name           String     @db.VarChar(100)
+  type           WalletType @default(CASH)
+  openingBalance Decimal    @default(0) @db.Decimal(12, 2)
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime   @updatedAt @db.Timestamptz(3)
+
+  gym                     Gym                   @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceTransactions      Transaction[]         @relation("TransactionSourceWallet")
+  destinationTransactions Transaction[]         @relation("TransactionDestinationWallet")
+  cashSessions            CashSession[]
+  cashSessionMovements    CashSessionMovement[]
+
+  @@unique([gymId, id])
+  @@unique([gymId, name])
+  @@index([gymId, type, isActive])
+}
+
+model Transaction {
+  id                  String          @id @default(uuid()) @db.Uuid
+  gymId               String          @db.Uuid
+  walletId            String          @db.Uuid
+  destinationWalletId String?         @db.Uuid
+  createdByUserId     String?         @db.Uuid
+  reversalOfId        String?         @db.Uuid
+  type                TransactionType
+  reference           String          @db.VarChar(80)
+  title               String          @db.VarChar(200)
+  amount              Decimal         @db.Decimal(12, 2)
+  currency            String          @db.VarChar(3)
+  paymentMethod       String?         @db.VarChar(60)
+  source              String?         @db.VarChar(40)
+  counterparty        String?         @db.VarChar(200)
+  transactionDate     DateTime        @db.Date
+  notes               String?         @db.Text
+  reversedAt          DateTime?       @db.Timestamptz(3)
+  reversalReason      String?         @db.Text
+  createdAt           DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime        @updatedAt @db.Timestamptz(3)
+
+  gym                  Gym                   @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  wallet               Wallet                @relation("TransactionSourceWallet", fields: [gymId, walletId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  destinationWallet    Wallet?               @relation("TransactionDestinationWallet", fields: [gymId, destinationWalletId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy            GymUser?              @relation("TransactionCreator", fields: [gymId, createdByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+  reversalOf           Transaction?          @relation("TransactionReversals", fields: [gymId, reversalOfId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  reversal             Transaction?          @relation("TransactionReversals")
+  payment              Payment?
+  expense              Expense?
+  cashSessionMovements CashSessionMovement[]
+
+  @@unique([gymId, id])
+  @@unique([gymId, reference])
+  @@unique([gymId, reversalOfId])
+  @@index([gymId, transactionDate])
+  @@index([gymId, type, transactionDate])
+  @@index([gymId, walletId, transactionDate])
+  @@index([gymId, createdByUserId, createdAt])
+}
+
+model Payment {
+  id                    String    @id @default(uuid()) @db.Uuid
+  gymId                 String    @db.Uuid
+  memberId              String    @db.Uuid
+  transactionId         String    @unique @db.Uuid
+  membershipPlanId      String?   @db.Uuid
+  recordedByUserId      String?   @db.Uuid
+  membershipPeriodStart DateTime? @db.Date
+  membershipPeriodEnd   DateTime? @db.Date
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+
+  gym            Gym             @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  member         Member          @relation(fields: [gymId, memberId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  transaction    Transaction     @relation(fields: [gymId, transactionId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  membershipPlan MembershipPlan? @relation(fields: [gymId, membershipPlanId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  recordedBy     GymUser?        @relation("PaymentRecorder", fields: [gymId, recordedByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([gymId, id])
+  @@unique([gymId, transactionId])
+  @@index([gymId, memberId, createdAt])
+  @@index([gymId, membershipPlanId])
+}
+
+model Expense {
+  id               String          @id @default(uuid()) @db.Uuid
+  gymId            String          @db.Uuid
+  transactionId    String          @unique @db.Uuid
+  recordedByUserId String?         @db.Uuid
+  category         ExpenseCategory @default(OTHER)
+  vendor           String?         @db.VarChar(200)
+  receiptReference String?         @db.VarChar(100)
+  createdAt        DateTime        @default(now()) @db.Timestamptz(3)
+
+  gym         Gym         @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  transaction Transaction @relation(fields: [gymId, transactionId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  recordedBy  GymUser?    @relation("ExpenseRecorder", fields: [gymId, recordedByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([gymId, id])
+  @@unique([gymId, transactionId])
+  @@index([gymId, category, createdAt])
+}
+
+model CashSession {
+  id              String            @id @default(uuid()) @db.Uuid
+  gymId           String            @db.Uuid
+  walletId        String            @db.Uuid
+  openedByUserId  String            @db.Uuid
+  closedByUserId  String?           @db.Uuid
+  status          CashSessionStatus @default(OPEN)
+  openingBalance  Decimal           @db.Decimal(12, 2)
+  expectedClosing Decimal?          @db.Decimal(12, 2)
+  actualClosing   Decimal?          @db.Decimal(12, 2)
+  discrepancy     Decimal?          @db.Decimal(12, 2)
+  openedAt        DateTime          @default(now()) @db.Timestamptz(3)
+  closedAt        DateTime?         @db.Timestamptz(3)
+  notes           String?           @db.Text
+  closingNotes    String?           @db.Text
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime          @updatedAt @db.Timestamptz(3)
+
+  gym       Gym                   @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  wallet    Wallet                @relation(fields: [gymId, walletId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  openedBy  GymUser               @relation("CashSessionOpener", fields: [gymId, openedByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+  closedBy  GymUser?              @relation("CashSessionCloser", fields: [gymId, closedByUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+  movements CashSessionMovement[]
+
+  @@unique([gymId, id])
+  @@index([gymId, status, openedAt])
+  @@index([gymId, walletId, openedAt])
+}
+
+// One row per cash-wallet side affected by a ledger transaction. A transfer
+// between two cash wallets therefore links to both open wallet sessions.
+model CashSessionMovement {
+  id            String           @id @default(uuid()) @db.Uuid
+  gymId         String           @db.Uuid
+  cashSessionId String           @db.Uuid
+  transactionId String           @db.Uuid
+  walletId      String           @db.Uuid
+  side          CashMovementSide
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
+
+  gym         Gym         @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cashSession CashSession @relation(fields: [gymId, cashSessionId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  transaction Transaction @relation(fields: [gymId, transactionId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+  wallet      Wallet      @relation(fields: [gymId, walletId], references: [gymId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([gymId, id])
+  @@unique([gymId, transactionId, side])
+  @@index([gymId, cashSessionId, createdAt])
+  @@index([gymId, walletId, createdAt])
+}
+
+model GymSettings {
+  gymId                   String   @id @db.Uuid
+  currency                String   @default("PKR") @db.VarChar(3)
+  timezone                String   @default("Asia/Karachi") @db.VarChar(64)
+  dateFormat              String   @default("DD/MM/YYYY") @db.VarChar(20)
+  language                String   @default("English") @db.VarChar(40)
+  openingTime             String?  @db.VarChar(5)
+  closingTime             String?  @db.VarChar(5)
+  paymentMethods          String[] @default(["Cash", "JazzCash", "EasyPaisa", "Bank Transfer"])
+  receiptPrefix           String   @default("GF") @db.VarChar(20)
+  allowPartialPayments    Boolean  @default(true)
+  requirePaymentNotes     Boolean  @default(false)
+  allowManualAttendance   Boolean  @default(true)
+  preventDuplicateCheckin Boolean  @default(true)
+  notifications           Boolean  @default(true)
+  lowBalanceWarning       Boolean  @default(true)
+  lowBalanceLimit         Decimal  @default(5000) @db.Decimal(12, 2)
+  autoSave                Boolean  @default(true)
+  compactTables           Boolean  @default(false)
+  createdAt               DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime @updatedAt @db.Timestamptz(3)
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+// Records who performed a sensitive operation and what category of fields
+// changed. Do not store credentials, payment details, or raw before/after data.
+model AuditLog {
+  id            String      @id @default(uuid()) @db.Uuid
+  gymId         String      @db.Uuid
+  actorUserId   String?     @db.Uuid
+  action        AuditAction
+  targetType    String      @db.VarChar(80)
+  targetId      String?     @db.VarChar(100)
+  changedFields String[]    @default([])
+  createdAt     DateTime    @default(now()) @db.Timestamptz(3)
+
+  gym   Gym      @relation(fields: [gymId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor GymUser? @relation("GymUserAuditActor", fields: [gymId, actorUserId], references: [gymId, userId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([gymId, id])
+  @@index([gymId, createdAt])
+  @@index([gymId, action, createdAt])
+  @@index([gymId, targetType, targetId])
+  @@index([actorUserId, createdAt])
+}
