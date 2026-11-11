@@ -21,6 +21,7 @@ export function corsPolicy(request: Request, response: Response, next: NextFunct
       return next(new AppError(403, 'CORS_ORIGIN_DENIED', 'This origin is not allowed.'))
     }
     response.setHeader('Access-Control-Allow-Origin', origin)
+    response.setHeader('Access-Control-Allow-Credentials', 'true')
   }
 
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')

@@ -40,11 +40,17 @@ for (const origin of allowedOrigins) {
   }
 }
 
+const accessTokenSecret = process.env.ACCESS_TOKEN_SECRET
+if (!accessTokenSecret || Buffer.byteLength(accessTokenSecret, 'utf8') < 32) {
+  throw new Error('ACCESS_TOKEN_SECRET must be configured with at least 32 bytes of random data.')
+}
+
 export const env = Object.freeze({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: parsePort(process.env.PORT),
   host: process.env.HOST?.trim() || '127.0.0.1',
   databaseUrl: parseDatabaseUrl(process.env.DATABASE_URL),
+  accessTokenSecret,
   allowedOrigins: new Set(allowedOrigins),
   isProduction: process.env.NODE_ENV === 'production',
 })

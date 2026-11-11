@@ -5,6 +5,7 @@ declare global {
     interface Locals {
       requestId: string
       validatedBody?: unknown
+      auth?: { userId: string; sessionId: string }
     }
   }
 }
